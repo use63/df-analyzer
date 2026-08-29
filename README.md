@@ -1,91 +1,62 @@
-# Node.js Starter Agent
+# DF-Analyzer - Dashboard Analisis Forensik Gambar Deepfake
 
-A minimal Node.js / TypeScript LLM Agent template on EdgeOne Makers — built on raw `fetch` against an OpenAI-compatible Chat Completions endpoint, with EdgeOne sandbox tool calling and `context.store`-backed conversation memory. No agent framework.
+DF-Analyzer adalah aplikasi dashboard forensik digital berbasis React, TypeScript, dan Vite yang dirancang untuk mendeteksi manipulasi gambar dan deepfake. Aplikasi ini terintegrasi dengan backend EdgeOne Makers untuk menyediakan asisten analisis berbasis kecerdasan buatan (AI) yang interaktif.
 
-**Framework:** None (raw Node) · **Category:** Quick Start <!-- TODO: confirm --> · **Language:** TypeScript
+## Fitur Utama
 
-[![Deploy to EdgeOne Makers](https://cdnstatic.tencentcs.com/edgeone/pages/deploy.svg)](https://edgeone.ai/makers/new?template=node-starter-agent&from=within&fromAgent=1&agentLang=typescript)
+1. **Tata Letak Fokus Media**: Kolom kiri didedikasikan penuh untuk pratinjau gambar sumber secara proporsional. Kolom kanan menyediakan sistem tab yang memisahkan hasil metrik forensik dan asisten obrolan AI secara rapi.
+2. **Desain Flat dan Bersih**: Antarmuka dirancang minimalis tanpa garis batas kontainer yang berlebihan (mencegah border fatigue) untuk memberikan kesan alat forensik profesional.
+3. **Penyimpanan Lokal IndexedDB**: Riwayat analisis gambar disimpan secara lokal di dalam browser menggunakan basis data IndexedDB, memungkinkan penyimpanan file gambar berukuran besar tanpa batas memori localStorage.
+4. **Sesi Obrolan AI Mandiri per Berkas**: Setiap gambar memiliki ID sesi percakapan backend yang unik. Riwayat obrolan untuk setiap berkas dipertahankan secara dinamis menggunakan sistem caching memori lokal sehingga riwayat tidak hilang saat berpindah antar gambar.
+5. **Sapaan Otomatis Aktif**: Sistem secara otomatis memicu pesan instruksi tersembunyi untuk meminta kesimpulan analisis AI sesaat setelah tab obrolan dibuka untuk gambar yang baru dianalisis.
+6. **Parameter EXIF Forensik Lengkap**: Menyajikan 12 parameter metadata gambar esensial termasuk merek kamera, tipe lensa, aperture, exposure time, ISO, ruang warna, dan koordinat GPS.
+7. **Deteksi Anomali Dinamis**: Menghasilkan daftar indikasi manipulasi gambar yang diacak secara realistis berdasarkan skor risiko analisis, lengkap dengan pesan fallback jika tidak ada anomali yang terdeteksi.
+8. **Kemampuan PWA (Progressive Web App)**: Aplikasi mendukung instalasi langsung di desktop/mobile dan siap dijalankan dalam kondisi offline (offline-ready) dengan service worker terintegrasi.
+9. **Tombol Hapus Semua Riwayat**: Menyediakan tombol pembersihan database di bagian bawah sidebar untuk menghapus seluruh riwayat pemindaian dan cache obrolan dari IndexedDB.
 
-<!-- ![preview](./assets/preview.png)  TODO: confirm -->
+## Struktur Direktori
 
-## Overview
+* **agents/**: Kode sumber backend berbasis stateful agent untuk EdgeOne Makers (penanganan POST /chat dan POST /chat/stop).
+* **cloud-functions/**: Kode sumber backend serverless stateless (penanganan POST /history).
+* **public/**: Folder aset statis untuk PWA (ikon aplikasi, favicon, dan Apple touch icon).
+* **src/**: Kode sumber frontend React dan TypeScript.
+  * **App.tsx**: Komponen utama yang mengatur tata letak, logika IndexedDB, transisi file, dan integrasi stream SSE.
+  * **App.module.css**: Modul gaya CSS untuk tata letak kolom, tab navigasi, desain flat, dan tombol kontrol.
+  * **api.ts**: Wrapper API untuk komunikasi HTTP POST ke /chat, /chat/stop, dan /history.
+  * **main.tsx**: Entri utama aplikasi yang mendaftarkan Service Worker PWA.
+  * **vite-env.d.ts**: Deklarasi tipe lingkungan pengembangan untuk Vite dan PWA client.
+* **vite.config.ts**: Konfigurasi build Vite, integrasi vite-plugin-pwa, dan pengaturan proxy port backend.
 
-The smallest reasonable starting point if you want a chat Agent without committing to a framework. The whole loop — prompt → stream LLM → execute tool calls → loop → final answer — is plain `fetch` and a small `toolRegistry`. Read the source top-to-bottom and you've seen everything.
+## Persyaratan Sistem
 
-- **SSE streaming chat** — token-by-token push of `text_delta`, plus `tool_called` events.
-- **EdgeOne sandbox tools** — `commands`, `files`, `code_interpreter`, `browser` are pulled from `context.tools` and exposed as OpenAI function calling tools.
-- **Tool-calling loop** — up to 10 rounds: model returns `tool_calls` → execute via `toolRegistry.execute()` → append results → re-request, until a final answer.
-- **Conversation memory** — `ChatSession(context.store)` reads/writes per-conversation history via the EdgeOne store.
-- **Honest cancellation** — frontend `AbortController` plus backend `context.request.signal` actually release the upstream LLM connection.
+* Node.js versi 18 atau lebih tinggi.
+* EdgeOne CLI (dapat diinstal melalui npm i -g edgeone).
 
-## Environment Variables
+## Cara Menjalankan secara Lokal
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `AI_GATEWAY_API_KEY` | Yes | Model gateway API key. Use your Makers Models API Key, or any OpenAI-compatible provider key. |
-| `AI_GATEWAY_BASE_URL` | Yes | Gateway base URL. For Makers Models, use `https://ai-gateway.edgeone.link/v1`. |
-| `AI_GATEWAY_MODEL` | No | Model ID. Defaults to `@makers/deepseek-v4-flash` (a free built-in model). |
-| `WSA_API_KEY` | No | Tencent Cloud Web Search API key. Required only if you use the web-search tool. |
+1. Instal seluruh dependensi proyek:
+   ```bash
+   npm install
+   ```
+2. Siapkan konfigurasi variabel lingkungan dengan menyalin berkas contoh:
+   ```bash
+   cp .env.example .env
+   ```
+   Isi nilai variabel `AI_GATEWAY_API_KEY` dan `AI_GATEWAY_BASE_URL` sesuai dengan kredensial EdgeOne Makers Anda.
+3. Jalankan server pengembangan terintegrasi:
+   ```bash
+   npm run dev:agents
+   ```
+   Perintah ini akan menyalakan server lokal EdgeOne Makers di port 8088 dan server Vite frontend di port 9000 (atau port dinamis yang tersedia).
 
-This template follows the OpenAI-compatible standard — point these at Makers Models or any compatible provider.
+## Pengaturan Jaringan dan Proxy
 
-### How to get `AI_GATEWAY_API_KEY`
+Aplikasi menggunakan konfigurasi proxy di dalam file `vite.config.ts` untuk mengalihkan permintaan API `/chat` dan `/history` dari server frontend Vite ke port backend gerbang EdgeOne lokal (`http://localhost:8088`). Hal ini menghindari masalah pembatasan CORS selama pengembangan lokal.
 
-1. Open the [Makers Console](https://edgeone.ai/makers/new?s_url=https://console.tencentcloud.com/edgeone/makers).
-2. Sign in and enable Makers.
-3. Go to **Makers → Models → API Key** and create a key.
-4. Copy it into `AI_GATEWAY_API_KEY`.
+## Batas Ukuran Header (HTTP 431)
 
-The built-in `@makers/deepseek-v4-flash` model is free with a usage cap and is suitable for prototyping. For production, bind your own paid provider (BYOK).
+To mencegah terjadinya galat HTTP 431 saat browser menyertakan cookie lokal berukuran besar saat proses reload atau HMR (Hot Module Replacement), skrip `"dev"` dan `"dev:agents"` pada `package.json` telah dikonfigurasi untuk menjalankan Node.js dengan parameter pelonggaran batas tajuk HTTP sebesar 32KB (`NODE_OPTIONS='--max-http-header-size=32768'`).
 
-### How to get `WSA_API_KEY`
+## Lisensi
 
-`WSA_API_KEY` is only needed when calling the web-search tool. See the [documentation](https://pages.edgeone.ai/document/sandbox-network-search-tool).
-
-## Local Development
-
-Prerequisites: Node.js ≥ 18 and the EdgeOne CLI (`npm i -g edgeone`).
-
-```bash
-npm install
-cp .env.example .env       # then fill in AI_GATEWAY_API_KEY / AI_GATEWAY_BASE_URL
-edgeone makers dev
-```
-
-Local agent metrics & traces are exposed at `http://localhost:8080/agent-metrics`.
-
-## Project Structure
-
-```text
-node-starter/
-├── agents/                          # Node/TS backend (EdgeOne Makers Agent Functions, stateful)
-│   ├── chat/index.ts               # POST /chat — SSE streaming chat with tool loop
-│   ├── chat/stop.ts                # POST /chat/stop — abort active agent run
-│   ├── _model.ts                   # LLM model config (private)
-│   ├── _logger.ts                  # Logger utility (private)
-│   ├── _session.ts                 # Session adapter over context.store (private)
-│   └── _tools.ts                   # EdgeOne tool registry (private)
-├── cloud-functions/                 # Node/TS backend (EdgeOne Makers Node Functions, stateless)
-│   ├── history/index.ts            # POST /history — conversation history
-│   └── _logger.ts                  # Logger utility (private)
-├── src/                             # React + Vite + TypeScript frontend
-│   ├── App.tsx                     # Main app + SSE stream lifecycle
-│   ├── api.ts                      # /chat, /chat/stop, /history wrappers
-│   └── components/                 # ChatWindow, ChatInput, CodeViewer, ToolIndicators, ...
-├── package.json
-├── vite.config.ts
-├── tsconfig.json
-└── index.html
-```
-
-> Files prefixed with `_` are private modules — not exposed as public routes.
-
-## Resources
-
-- [EdgeOne Makers Agents — Documentation](https://pages.edgeone.ai/document/agents)
-- [EdgeOne Makers — Quick Start](https://pages.edgeone.ai/document/agents-quick-start)
-- [Makers Models](https://pages.edgeone.ai/document/models)
-
-## License
-
-MIT.
+Proyek ini menggunakan lisensi MIT.
