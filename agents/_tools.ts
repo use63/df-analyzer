@@ -131,6 +131,48 @@ export function buildTools(context: any, logger?: any): ToolRegistry {
       logger.log(`[tools] registered: ${name}`);
     }
   }
+  registry.register(
+      "analyzeDeepfake",
+      {
+        type: "function",
+        function: {
+          name: "analyzeDeepfake",
+          description: "Menganalisis tautan atau metadata media untuk mendeteksi manipulasi deepfake menggunakan sistem Reality Defender.",
+          parameters: {
+            type: "object",
+            properties: {
+              mediaUrl: {
+                type: "string",
+                description: "Tautan URL media (gambar/video) yang dikirimkan oleh pengguna untuk dianalisis."
+              }
+            },
+            required: ["mediaUrl"]
+          }
+        }
+      },
+      async (args: Record<string, unknown>) => {
+        const url = args.mediaUrl as string;
+        if (logger) logger.log(`[tools] Memerintahkan cloud-function untuk memindai: ${url}`);
+
+        try {
+          // 1. Impor fungsi nyata yang ada di folder cloud-functions
+          const analyzeModule = await import('../cloud-functions/analyze/index');
+          const analyzeReal = analyzeModule.default;
+          
+          // 2. Eksekusi fungsi tersebut dan kembalikan hasil aslinya ke Agen AI
+          const result = await analyzeReal({ mediaUrl: url });
+          return result;
+          
+        } catch (error) {
+          if (logger) logger.log(`[tools] Galat pemanggilan fungsi: ${error}`);
+          return {
+            status: "error",
+            message: "Gagal mengeksekusi pemindaian sistem.",
+            details: String(error)
+          };
+        }
+      }
+    );
 
   return registry;
 }

@@ -64,6 +64,7 @@ export function sendMessageStream(
   message: string,
   callbacks: StreamCallbacks,
   conversationId?: string,
+  analysisContext?: any,
 ): AbortController {
   const ctrl = new AbortController();
 
@@ -76,10 +77,15 @@ export function sendMessageStream(
         headers['makers-conversation-id'] = conversationId;
       }
 
+      const payload: Record<string, any> = { message };
+      if (analysisContext) {
+        payload.context = analysisContext;
+      }
+
       const res = await fetch(API.chat, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(payload),
         signal: ctrl.signal,
       });
 

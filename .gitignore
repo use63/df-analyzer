@@ -16,4 +16,5 @@ plan
 .env
 .edgeone/*
 .tef_dist/*
-  
+
+.raw_uji_coba/

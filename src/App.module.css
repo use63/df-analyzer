@@ -1,42 +1,925 @@
-/* Desktop stage: center the terminal window and render an ambient backdrop. */
-.app {
-  position: fixed;
-  inset: 0;
+.dashboard {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
+  width: 100vw;
+  height: 100vh;
+  background-color: #0c0d12;
+  color: #d1d4db;
+  font-family: 'JetBrains Mono', monospace;
   overflow: hidden;
 }
 
-/* Subtle moving accents that hint at "something" behind the window
-   without distracting from the terminal content. */
-.app::before,
-.app::after {
-  content: '';
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  pointer-events: none;
-  z-index: 0;
-}
-.app::before {
-  width: 480px;
-  height: 480px;
-  top: -160px;
-  left: -120px;
-  background: radial-gradient(circle, rgba(255, 176, 0, 0.10) 0%, transparent 70%);
-}
-.app::after {
-  width: 520px;
-  height: 520px;
-  bottom: -180px;
-  right: -140px;
-  background: radial-gradient(circle, rgba(80, 110, 200, 0.08) 0%, transparent 70%);
+.sidebar {
+  width: 320px;
+  background-color: #12141c;
+  border-right: 1px solid #202430;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 100%;
 }
 
-@media (max-width: 720px) {
-  .app {
-    padding: 0;
+.sidebarHeader {
+  padding: 24px 20px;
+  border-bottom: 1px solid #202430;
+}
+
+.logoArea {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ffb000;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.logoIcon {
+  width: 24px;
+  height: 24px;
+  fill: #ffb000;
+}
+
+.sidebarSubtitle {
+  font-size: 11px;
+  color: #6c7281;
+  margin-top: 4px;
+}
+
+.historySection {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #8a90a0;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyCard {
+  background-color: #181b24;
+  border: 1px solid #242938;
+  border-radius: 6px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+  width: 100%;
+}
+
+.historyCard:hover {
+  border-color: #ffb000;
+  background-color: #1e222e;
+}
+
+.historyCardActive {
+  border-color: #ffb000;
+  background-color: #1f2433;
+  box-shadow: 0 0 10px rgba(255, 176, 0, 0.15);
+}
+
+.historyCardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+
+.fileName {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e5ec;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.badgeDanger {
+  background-color: rgba(255, 110, 110, 0.15);
+  color: #ff6e6e;
+  border: 1px solid rgba(255, 110, 110, 0.3);
+}
+
+.badgeSuccess {
+  background-color: rgba(135, 217, 108, 0.15);
+  color: #87d96c;
+  border: 1px solid rgba(135, 217, 108, 0.3);
+}
+
+.badgeWarning {
+  background-color: rgba(255, 176, 0, 0.15);
+  color: #ffb000;
+  border: 1px solid rgba(255, 176, 0, 0.3);
+}
+
+.cardMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #6c7281;
+}
+
+.mainContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0c0d12;
+}
+
+.topSection {
+  flex: 3;
+  border-bottom: 1px solid #202430;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.panelTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelTitleIcon {
+  color: #ffb000;
+}
+
+.uploadContainer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 250px;
+}
+
+.uploadBox {
+  border: 2px dashed #30374a;
+  border-radius: 8px;
+  background-color: #12141c;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  max-width: 500px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.uploadBox:hover {
+  border-color: #ffb000;
+  background-color: #151822;
+}
+
+.uploadIcon {
+  width: 48px;
+  height: 48px;
+  fill: #6c7281;
+  margin-bottom: 16px;
+}
+
+.uploadBox:hover .uploadIcon {
+  fill: #ffb000;
+}
+
+.uploadText {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e5ec;
+  margin-bottom: 8px;
+}
+
+.uploadSubtext {
+  font-size: 12px;
+  color: #6c7281;
+}
+
+.fileInput {
+  display: none;
+}
+
+.analysisWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.wrapperHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.btnReset {
+  background-color: transparent;
+  border: 1px solid #ff6e6e;
+  color: #ff6e6e;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.btnReset:hover {
+  background-color: rgba(255, 110, 110, 0.1);
+}
+
+.analysisGrid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 900px) {
+  .analysisGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.previewCard {
+  background-color: #12141c;
+  border: 1px solid #202430;
+  border-radius: 6px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.imagePreview {
+  max-width: 100%;
+  max-height: 250px;
+  border-radius: 4px;
+  object-fit: contain;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  border: 1px solid #30374a;
+}
+
+.previewLabel {
+  font-size: 12px;
+  color: #8a90a0;
+  text-align: center;
+}
+
+.resultsCard {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.riskSection {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #202430;
+}
+
+@media (max-width: 600px) {
+  .riskSection {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.riskPercentInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.riskValue {
+  font-size: 28px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.riskBarContainer {
+  flex: 1;
+  width: 100%;
+}
+
+.riskLabel {
+  font-size: 12px;
+  color: #8a90a0;
+  margin-bottom: 6px;
+}
+
+.riskBarBg {
+  background-color: #242938;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.riskBarFill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease-out;
+}
+
+.detailsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+.detailsGrid > :first-child {
+  border-bottom: 1px solid #202430;
+  padding-bottom: 24px;
+}
+
+.detailBox {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.detailBoxTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffb000;
+  border-bottom: 1px solid #242938;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.exifTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.exifRow {
+  border-bottom: 1px solid #1f2330;
+}
+
+.exifRow:last-child {
+  border-bottom: none;
+}
+
+.exifKey {
+  font-size: 11px;
+  color: #6c7281;
+  padding: 6px 0;
+  font-weight: 500;
+  width: 40%;
+}
+
+.exifValue {
+  font-size: 11px;
+  color: #e2e5ec;
+  padding: 6px 0;
+  text-align: right;
+  word-break: break-all;
+}
+
+.anomaliesList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+  margin: 0;
+}
+
+.anomalyItem {
+  font-size: 11px;
+  color: #e2e5ec;
+  line-height: 1.4;
+  list-style-type: square;
+}
+
+.jsonCollapsible {
+  border: 1px solid #242938;
+  border-radius: 6px;
+  background-color: #0b0b0d;
+}
+
+.jsonHeader {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.jsonHeader:hover {
+  background-color: #12141c;
+}
+
+.jsonTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8a90a0;
+}
+
+.jsonToggleIcon {
+  font-size: 12px;
+  color: #8a90a0;
+}
+
+.jsonContent {
+  padding: 16px;
+  border-top: 1px solid #242938;
+  overflow-x: auto;
+  max-height: 200px;
+}
+
+.jsonPre {
+  margin: 0;
+  font-size: 11px;
+  color: #87d96c;
+}
+
+.bottomSection {
+  flex: 2;
+  background-color: #12141c;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chatHeader {
+  padding: 12px 20px;
+  background-color: #161a24;
+  border-bottom: 1px solid #202430;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chatTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusIndicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.statusOnline {
+  background-color: #87d96c;
+  box-shadow: 0 0 8px #87d96c;
+}
+
+.chatActions {
+  display: flex;
+  gap: 8px;
+}
+
+.btnActionIcon {
+  background: transparent;
+  border: 1px solid #30374a;
+  color: #8a90a0;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btnActionIcon:hover {
+  border-color: #ffb000;
+  color: #ffb000;
+}
+
+.chatBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background-color: #0e1017;
+}
+
+.chatBubble {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.bubbleUser {
+  background-color: rgba(255, 176, 0, 0.1);
+  border: none;
+  align-self: flex-end;
+  color: #ffb000;
+}
+
+.bubbleAgent {
+  background-color: #181b24;
+  border: none;
+  align-self: flex-start;
+  color: #e2e5ec;
+}
+
+.bubbleSystem {
+  background-color: rgba(110, 150, 255, 0.05);
+  border: none;
+  align-self: center;
+  color: #7ec7e2;
+  font-size: 11px;
+  max-width: 90%;
+  padding: 6px 12px;
+  text-align: center;
+}
+
+.bubbleTool {
+  background-color: #0b0b0d;
+  border: none;
+  align-self: flex-start;
+  color: #7ec7e2;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.bubbleError {
+  background-color: rgba(255, 110, 110, 0.05);
+  border: none;
+  color: #ff6e6e;
+  align-self: center;
+  font-size: 12px;
+}
+
+.chatInputArea {
+  padding: 16px 20px;
+  background-color: #12141c;
+  border-top: 1px solid #202430;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.chatInput {
+  flex: 1;
+  background-color: #0b0b0d;
+  border: 1px solid #30374a;
+  border-radius: 4px;
+  color: #ffffff;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.chatInput:focus {
+  border-color: #ffb000;
+}
+
+.btnSend {
+  background-color: #ffb000;
+  color: #0b0b0d;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btnSend:hover {
+  background-color: #ffd277;
+}
+
+.btnSend:disabled {
+  background-color: #30374a;
+  color: #6c7281;
+  cursor: not-allowed;
+}
+
+.chatBubbleMarkdown {
+  display: inline-block;
+}
+
+.chatBubbleMarkdown p {
+  margin-bottom: 8px;
+}
+
+.chatBubbleMarkdown p:last-child {
+  margin-bottom: 0;
+}
+
+.chatBubbleMarkdown ul, .chatBubbleMarkdown ol {
+  margin-left: 20px;
+  margin-bottom: 8px;
+}
+
+.chatBubbleMarkdown li {
+  margin-bottom: 4px;
+}
+
+.scanningText {
+  font-size: 13px;
+  color: #ffb000;
+  animation: pulse 1.5s infinite;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loadingSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 176, 0, 0.2);
+  border-top: 2px solid #ffb000;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+.sidebarNav {
+  padding: 16px 20px;
+  border-bottom: 1px solid #202430;
+}
+
+.btnNewAnalysis {
+  width: 100%;
+  background-color: #ffb000;
+  color: #0b0b0d;
+  border: 1px solid #ffb000;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btnNewAnalysis:hover {
+  background-color: #ffd277;
+  border-color: #ffd277;
+  box-shadow: 0 0 12px rgba(255, 176, 0, 0.25);
+}
+
+.btnNewAnalysisActive {
+  background-color: #0b0b0d;
+  color: #ffb000;
+  border-color: #ffb000;
+  box-shadow: 0 0 10px rgba(255, 176, 0, 0.1) inset;
+}
+
+.historyLayout {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: calc(100% - 60px); /* Subtract header height */
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .historyLayout {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+}
+
+.leftForensicColumn {
+  flex: 45;
+  border-right: 1px solid #202430;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  background-color: #0e1017;
+  height: 100%;
+}
+
+@media (max-width: 900px) {
+  .leftForensicColumn {
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid #202430;
+    width: 100%;
+    height: auto;
+    overflow-y: visible;
+  }
+}
+
+.rightChatColumn {
+  flex: 55;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+  background-color: #12141c;
+}
+
+@media (max-width: 900px) {
+  .rightChatColumn {
+    flex: none;
+    width: 100%;
+    height: 500px; /* Bounded height on mobile for readability */
+  }
+}
+
+.mainContentHeader {
+  height: 60px;
+  border-bottom: 1px solid #202430;
+  padding: 0 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #12141c;
+  flex-shrink: 0;
+}
+
+.previewCardFull {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex: 1;
+  width: 100%;
+  overflow: hidden;
+}
+
+.imageFocusContainer {
+  flex: 1;
+  width: 100%;
+  height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.imageFocus {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.tabsHeader {
+  display: flex;
+  background-color: #161a23;
+  border-bottom: 1px solid #202430;
+  flex-shrink: 0;
+}
+
+.tabBtn {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8a90a0;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+}
+
+.tabBtn:hover {
+  color: #e2e5ec;
+  background-color: #1e222e;
+}
+
+.tabBtnActive {
+  color: #ffb000;
+  border-bottom: 2px solid #ffb000;
+  background-color: #12141c;
+}
+
+.tabsContentContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: calc(100% - 46px);
+}
+
+.chatbotTabContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.btnClearHistory {
+  width: calc(100% - 40px);
+  margin: 16px 20px;
+  background-color: transparent;
+  color: #ff6e6e;
+  border: 1px solid #ff6e6e;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btnClearHistory:hover {
+  background-color: rgba(255, 110, 110, 0.15);
+  box-shadow: 0 0 10px rgba(255, 110, 110, 0.2);
+}
+
+.noAnomaliesFallback {
+  font-style: italic;
+  color: #7a829e;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+@media (max-width: 900px) {
+  .previewCardFull {
+    min-height: 350px;
+    height: 350px;
   }
 }
