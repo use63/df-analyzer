@@ -38,6 +38,10 @@ export default defineConfig({
   ],
   server: {
     proxy: {
+      '/analyze': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
+      },
       '/chat': {
         target: 'http://localhost:8088',
         changeOrigin: true,

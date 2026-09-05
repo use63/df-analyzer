@@ -128,3 +128,54 @@ export interface TurnMeta {
   /** ID of the latest `text` line in `lines` for delta append, or null if next delta should create a new one. */
   currentTextLineId: string | null;
 }
+
+// ─── Kontrak Endpoint POST /analyze ──────────────────────────────────────────
+export interface ExifData {
+  camera: string | null;
+  make: string | null;
+  model: string | null;
+  software: string | null;
+  dateOriginal: string | null;
+  resolution: string | null;
+  width: number | null;
+  height: number | null;
+  lens: string | null;
+  aperture: string | null;
+  exposureTime: string | null;
+  iso: number | string | null;
+  colorSpace: string | null;
+  gps: string | null;
+  compression: string | null;
+}
+
+export interface AnalyzeSuccessData {
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  analyzedAt: string;
+  riskScore: number | null;
+  status: string;
+  exif: ExifData;
+  anomalies: string[];
+  realityDefender: {
+    status: string;
+    score: number | null;
+    modelResults?: unknown;
+  };
+}
+
+export interface AnalyzeSuccessResponse {
+  success: true;
+  data: AnalyzeSuccessData;
+}
+
+export interface AnalyzeErrorResponse {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  };
+}
+
+export type AnalyzeResponse = AnalyzeSuccessResponse | AnalyzeErrorResponse;

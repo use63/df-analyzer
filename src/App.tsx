@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Message, ReplLine } from './types';
-import { fetchConversationHistory, sendMessageStream } from './api';
+import { fetchConversationHistory, sendMessageStream, analyzeImage } from './api';
 import { I18nProvider } from './i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,23 +12,32 @@ interface AnalysisData {
   id: string;
   fileName: string;
   fileUrl: string;
-  riskScore: number;
+  riskScore: number | null;
   conversationId: string;
+  status?: string;
   exif: {
-    camera: string;
-    software: string;
-    dateOriginal: string;
-    resolution: string;
-    compression: string;
-    make?: string;
-    lens?: string;
-    aperture?: string;
-    exposureTime?: string;
-    iso?: string;
-    colorSpace?: string;
-    gps?: string;
+    camera: string | null;
+    software: string | null;
+    dateOriginal: string | null;
+    resolution: string | null;
+    compression: string | null;
+    make?: string | null;
+    model?: string | null;
+    lens?: string | null;
+    aperture?: string | null;
+    exposureTime?: string | null;
+    iso?: string | null;
+    colorSpace?: string | null;
+    gps?: string | null;
+    width?: number | null;
+    height?: number | null;
   };
   anomalies: string[];
+  realityDefender?: {
+    status: string;
+    score: number | null;
+    modelResults?: unknown;
+  };
 }
 
 
@@ -117,6 +126,7 @@ function AppInner() {
   const [historyList, setHistoryList] = useState<AnalysisData[]>([]);
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisData | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [navigationMode, setNavigationMode] = useState<'new' | 'history'>('new');
   const [activeTab, setActiveTab] = useState<'analysis' | 'ai'>('analysis');
 
@@ -127,6 +137,7 @@ function AppInner() {
   const [historyLoading, setHistoryLoading] = useState(true);
 
   const abortCtrlRef = useRef<AbortController | null>(null);
+  const analyzeAbortCtrlRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const triggeredGreetingsRef = useRef<Set<string>>(new Set());
   const chatCacheRef = useRef<Record<string, ReplLine[]>>({});
@@ -273,128 +284,122 @@ function AppInner() {
     }
   }, [activeAnalysis]);
 
-  const handleAnalyzeSubmit = (payload: { fileName: string; fileBase64: string }) => {
-    console.log('[Forensic-Scanner] Mengirim berkas analisis ke peladen:', payload);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const name = file.name;
-    const reader = new FileReader();
+    // Reset file input value so re-selecting same file triggers change
+    e.target.value = '';
 
-    reader.onload = (event) => {
-      const base64String = event.target?.result as string;
-      if (!base64String) return;
+    // Frontend pre-validation
+    setScanError(null);
 
-      // Print simulated JSON payload to console
-      handleAnalyzeSubmit({
-        fileName: name,
-        fileBase64: base64String
+    // Check file type
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!validTypes.includes(file.type) && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) {
+      setScanError('Format berkas tidak didukung. Harap unggah berkas gambar JPG, PNG, WebP, atau GIF.');
+      return;
+    }
+
+    // Check file size (20 MB safe serverless limit)
+    const MAX_SIZE = 20 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setScanError(`Ukuran berkas terlalu besar (${(file.size / (1024 * 1024)).toFixed(1)} MB). Batas maksimum adalah 20 MB.`);
+      return;
+    }
+
+    if (file.size === 0) {
+      setScanError('Berkas kosong (0 bytes) atau rusak.');
+      return;
+    }
+
+    // Abort any ongoing analysis
+    if (analyzeAbortCtrlRef.current) {
+      analyzeAbortCtrlRef.current.abort();
+    }
+    const abortCtrl = new AbortController();
+    analyzeAbortCtrlRef.current = abortCtrl;
+
+    setScanning(true);
+
+    try {
+      // Read base64 for local preview
+      const base64String = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Gagal membaca berkas gambar lokal.'));
+        reader.readAsDataURL(file);
       });
 
-      setScanning(true);
+      if (abortCtrl.signal.aborted) return;
 
-      // Simulate forensic analysis processing
-      setTimeout(() => {
-        const isFakeName =
-          name.toLowerCase().includes('fake') ||
-          name.toLowerCase().includes('manipulasi') ||
-          name.toLowerCase().includes('deep');
-        
-        const risk = isFakeName
-          ? Math.floor(Math.random() * 15) + 85 // 85% to 100%
-          : Math.floor(Math.random() * 65) + 10; // 10% to 75%
+      // Call real backend API POST /analyze
+      const response = await analyzeImage(file, abortCtrl.signal);
+      const { data } = response;
 
-        let finalAnomalies: string[] = [];
-        if (risk > 35) {
-          const pool = [
-            'Inkonsistensi distorsi lensa terdeteksi pada area fokus utama (wajah).',
-            'Tingkat anomali kompresi ganda (double-compression anomalies) terdeteksi tinggi.',
-            'Pola derau piksel tidak alami, terindikasi hasil generasi model difusi sintetis.',
-            'Metadata EXIF orisinal kamera telah dibersihkan atau dimodifikasi.',
-            'Kompresi gambar tidak seragam pada area detail tinggi.',
-            'Kontras pencahayaan tidak konsisten di batas bayangan objek.',
-            'Ditemukan artefak pemrosesan gambar pada perbatasan gradasi warna.',
-            'Penyimpangan kromatik terdeteksi tidak wajar di area kontras tinggi.',
-            'Struktur pencahayaan pada wajah subjek tidak cocok dengan latar belakang.',
-            'Pola piksel sisa hasil interpolasi bicubic terdeteksi di pinggiran objek.',
-            'Ketidakcocokan bayangan geometris terdeteksi pada proyeksi sudut cahaya.',
-            'Modifikasi metadata struktur tag TIFF terdeteksi secara manual.'
-          ];
-          const shuffled = [...pool].sort(() => 0.5 - Math.random());
-          const count = risk > 70 ? 3 : 2;
-          finalAnomalies = shuffled.slice(0, count);
-        } else {
-          finalAnomalies = [
-            'Pola piksel dan noise sensor seragam dan alami di seluruh frame berkas.',
-            'Struktur pencahayaan pada subjek gambar konsisten dengan background.',
-            'Metadata EXIF konsisten dengan standar kamera seluler umum.'
-          ];
+      if (abortCtrl.signal.aborted) return;
+
+      const newConversationId = crypto.randomUUID();
+      const newResult: AnalysisData = {
+        id: 'upload-' + Date.now(),
+        fileName: data.fileName || file.name,
+        fileUrl: base64String,
+        riskScore: data.riskScore,
+        conversationId: newConversationId,
+        status: data.status,
+        exif: {
+          camera: data.exif.camera,
+          make: data.exif.make,
+          model: data.exif.model,
+          software: data.exif.software,
+          dateOriginal: data.exif.dateOriginal,
+          resolution: data.exif.resolution,
+          compression: data.exif.compression,
+          lens: data.exif.lens,
+          aperture: data.exif.aperture,
+          exposureTime: data.exif.exposureTime,
+          iso: data.exif.iso != null ? String(data.exif.iso) : null,
+          colorSpace: data.exif.colorSpace,
+          gps: data.exif.gps,
+          width: data.exif.width,
+          height: data.exif.height,
+        },
+        anomalies: data.anomalies || [],
+        realityDefender: data.realityDefender,
+      };
+
+      // Save to IndexedDB ONLY on success
+      await saveAnalysisToDB(newResult);
+
+      setHistoryList(prev => [newResult, ...prev]);
+      setActiveAnalysis(newResult);
+      setNavigationMode('history');
+      setActiveTab('analysis');
+
+      // Add system notification in the chat
+      const riskDisplay = data.riskScore != null ? `${data.riskScore}%` : (data.status || 'N/A');
+      setLines(prev => [
+        ...prev,
+        {
+          kind: 'sysHint',
+          id: crypto.randomUUID(),
+          text: `[Analisis Forensik Selesai]: Berhasil memindai "${file.name}". Status: ${data.status} | Skor Risiko: ${riskDisplay}. Anda sekarang dapat menanyakan kesimpulan forensik kepada AI.`,
+          ts: Date.now(),
+          tone: (data.riskScore ?? 0) > 60 ? 'warn' : 'dim'
         }
-
-        const simulatedResult: AnalysisData = {
-          id: 'upload-' + Date.now(),
-          fileName: name,
-          fileUrl: base64String, // Use the base64 string directly as the image source URL
-          riskScore: risk,
-          conversationId: crypto.randomUUID(),
-          exif: {
-            camera: file.type === 'image/png' ? 'N/A' : 'Sony ILCE-7M3 (A7 III)',
-            software: file.type === 'image/png' ? 'Adobe Photoshop CC (macOS)' : 'Sony Firmware v4.0',
-            dateOriginal: new Date().toISOString().replace('T', ' ').slice(0, 19),
-            resolution: 'Metadata Berkas (' + (file.size / 1024).toFixed(1) + ' KB)',
-            compression: file.type || 'image/jpeg',
-            make: file.type === 'image/png' ? 'N/A' : 'Sony Corporation',
-            lens: file.type === 'image/png' ? 'N/A' : 'FE 24-70mm F2.8 GM',
-            aperture: file.type === 'image/png' ? 'N/A' : 'f/2.8',
-            exposureTime: file.type === 'image/png' ? 'N/A' : '1/125 sec',
-            iso: file.type === 'image/png' ? 'N/A' : '100',
-            colorSpace: file.type === 'image/png' ? 'Uncalibrated / AdobeRGB' : 'sRGB IEC61966-2.1',
-            gps: file.type === 'image/png' ? 'Koordinat Dihapus / Stripped' : '-7.2504, 110.4321'
-          },
-          anomalies: finalAnomalies
-        };
-
-        saveAnalysisToDB(simulatedResult)
-          .then(() => {
-            setHistoryList(prev => [simulatedResult, ...prev]);
-            setActiveAnalysis(simulatedResult);
-            setNavigationMode('history');
-            setActiveTab('analysis');
-          })
-          .catch(err => {
-            console.error('Failed to save analysis to IndexedDB:', err);
-            // Fallback
-            setHistoryList(prev => [simulatedResult, ...prev]);
-            setActiveAnalysis(simulatedResult);
-            setNavigationMode('history');
-            setActiveTab('analysis');
-          })
-          .finally(() => {
-            setScanning(false);
-          });
-
-        // Add a system notification in the chat
-        setLines(prev => [
-          ...prev,
-          {
-            kind: 'sysHint',
-            id: crypto.randomUUID(),
-            text: `[Analisis Forensik Baru]: Berhasil menganalisis "${name}" dengan Skor Risiko Manipulasi: ${risk}%. Anda sekarang dapat menanyakan detailnya kepada AI.`,
-            ts: Date.now(),
-            tone: risk > 60 ? 'warn' : 'dim'
-          }
-        ]);
-      }, 1500);
-    };
-
-    reader.onerror = (error) => {
-      console.error('[Forensic-Scanner] Gagal membaca berkas berkas:', error);
-    };
-
-    reader.readAsDataURL(file);
+      ]);
+    } catch (err: any) {
+      if (err.name === 'AbortError' || abortCtrl.signal.aborted) {
+        return;
+      }
+      console.error('[Forensic-Scanner] Galat analisis:', err);
+      setScanError(err.message || 'Gagal menganalisis berkas. Pastikan backend EdgeOne aktif dan API key terkonfigurasi.');
+    } finally {
+      if (analyzeAbortCtrlRef.current === abortCtrl) {
+        analyzeAbortCtrlRef.current = null;
+      }
+      setScanning(false);
+    }
   };
 
   const handleSendMessage = (e?: React.FormEvent, customText?: string) => {
@@ -421,11 +426,24 @@ function AppInner() {
     let messageWithContext = text;
     let analysisContext: any = null;
     if (activeAnalysis) {
+      const scoreDisplay = activeAnalysis.riskScore != null ? `${activeAnalysis.riskScore}%` : (activeAnalysis.status || 'Tidak tersedia');
+      const exifItems = [
+        activeAnalysis.exif.camera ? `Kamera=${activeAnalysis.exif.camera}` : null,
+        activeAnalysis.exif.software ? `Software=${activeAnalysis.exif.software}` : null,
+        activeAnalysis.exif.resolution ? `Resolusi/Dimensi=${activeAnalysis.exif.resolution}` : null,
+        activeAnalysis.exif.compression ? `Kompresi=${activeAnalysis.exif.compression}` : null,
+      ].filter(Boolean).join(', ') || 'Metadata EXIF tidak tersedia';
+
+      const anomaliesText = activeAnalysis.anomalies.length > 0
+        ? activeAnalysis.anomalies.join(' | ')
+        : 'Tidak ada indikasi anomali terdeteksi';
+
       messageWithContext = `[Konteks Hasil Analisis Media Aktif:
 Nama File: ${activeAnalysis.fileName}
-Skor Risiko Manipulasi: ${activeAnalysis.riskScore}%
-Metadata EXIF: Kamera=${activeAnalysis.exif.camera}, Software=${activeAnalysis.exif.software}, Resolusi/Berkas=${activeAnalysis.exif.resolution}, Kompresi=${activeAnalysis.exif.compression}
-Daftar Anomali: ${activeAnalysis.anomalies.join(' | ')}
+Status Deteksi: ${activeAnalysis.status || 'ANALYZED'}
+Skor Risiko Manipulasi: ${scoreDisplay}
+Metadata EXIF: ${exifItems}
+Daftar Anomali: ${anomaliesText}
 ]
 Pertanyaan Pengguna: ${text}`;
 
@@ -433,6 +451,7 @@ Pertanyaan Pengguna: ${text}`;
       analysisContext = {
         fileName: activeAnalysis.fileName,
         riskScore: activeAnalysis.riskScore,
+        status: activeAnalysis.status,
         exif: activeAnalysis.exif,
         anomalies: activeAnalysis.anomalies,
       };
@@ -541,7 +560,13 @@ Pertanyaan Pengguna: ${text}`;
       abortCtrlRef.current.abort();
       abortCtrlRef.current = null;
     }
+    if (analyzeAbortCtrlRef.current) {
+      analyzeAbortCtrlRef.current.abort();
+      analyzeAbortCtrlRef.current = null;
+    }
     setLoading(false);
+    setScanning(false);
+    setScanError(null);
 
     // Clear triggered greetings and chat cache memory
     triggeredGreetingsRef.current.clear();
@@ -574,11 +599,16 @@ Pertanyaan Pengguna: ${text}`;
 
   const handleClearAllHistory = () => {
     if (window.confirm('Apakah Anda yakin ingin menghapus seluruh riwayat analisis? Tindakan ini tidak dapat dibatalkan.')) {
+      if (analyzeAbortCtrlRef.current) {
+        analyzeAbortCtrlRef.current.abort();
+        analyzeAbortCtrlRef.current = null;
+      }
       clearAllAnalysisFromDB()
         .then(() => {
           setHistoryList([]);
           setActiveAnalysis(null);
           setNavigationMode('new');
+          setScanError(null);
           triggeredGreetingsRef.current.clear();
           chatCacheRef.current = {};
           setLines([
@@ -598,19 +628,22 @@ Pertanyaan Pengguna: ${text}`;
     }
   };
 
-  const getRiskColor = (score: number) => {
+  const getRiskColor = (score: number | null) => {
+    if (score == null) return '#8c9ba5';
     if (score > 70) return '#ff6e6e'; // Red
     if (score > 35) return '#ffb000'; // Yellow/Amber
     return '#87d96c'; // Green
   };
 
-  const getRiskText = (score: number) => {
+  const getRiskText = (score: number | null, status?: string) => {
+    if (score == null) return status || 'Tidak tersedia';
     if (score > 70) return 'Tinggi (Terindikasi Manipulasi)';
     if (score > 35) return 'Sedang (Mencurigakan)';
-    return 'Rendah (Aman)';
+    return 'Rendah (Autentik)';
   };
 
-  const getBadgeClass = (score: number) => {
+  const getBadgeClass = (score: number | null) => {
+    if (score == null) return styles.badgeDim;
     if (score > 70) return styles.badgeDanger;
     if (score > 35) return styles.badgeWarning;
     return styles.badgeSuccess;
@@ -659,12 +692,12 @@ Pertanyaan Pengguna: ${text}`;
                     {item.fileName}
                   </span>
                   <span className={`${styles.badge} ${getBadgeClass(item.riskScore)}`}>
-                    {item.riskScore}%
+                    {item.riskScore != null ? `${item.riskScore}%` : (item.status || 'N/A')}
                   </span>
                 </div>
                 <div className={styles.cardMeta}>
                   <span>Tipe: Gambar</span>
-                  <span>{item.exif.dateOriginal !== 'N/A' ? item.exif.dateOriginal.slice(0, 10) : 'Lokal'}</span>
+                  <span>{item.exif?.dateOriginal ? item.exif.dateOriginal.slice(0, 10) : 'Lokal'}</span>
                 </div>
               </button>
             ))}
@@ -693,6 +726,22 @@ Pertanyaan Pengguna: ${text}`;
               <span>Analisis Gambar Baru</span>
             </div>
 
+            {/* Error Notification */}
+            {scanError && (
+              <div className={styles.scanErrorBox}>
+                <span className={styles.errorIcon}>⚠️</span>
+                <span className={styles.errorMessage}>{scanError}</span>
+                <button
+                  type="button"
+                  onClick={() => setScanError(null)}
+                  className={styles.btnDismissError}
+                  title="Tutup pesan galat"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {/* Upload Area */}
             <div className={styles.uploadContainer}>
               <label className={styles.uploadBox}>
@@ -700,10 +749,10 @@ Pertanyaan Pengguna: ${text}`;
                   <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
                 </svg>
                 <span className={styles.uploadText}>Unggah Berkas Gambar</span>
-                <span className={styles.uploadSubtext}>Klik atau seret foto lokal ke area ini</span>
+                <span className={styles.uploadSubtext}>Klik atau seret foto lokal ke area ini (JPG, PNG, WebP, GIF maks 50 MB)</span>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
                   onChange={handleFileUpload}
                   className={styles.fileInput}
                 />
@@ -714,7 +763,7 @@ Pertanyaan Pengguna: ${text}`;
               <div style={{ display: 'flex', justifyContent: 'center', margin: '20px 0' }}>
                 <div className={styles.scanningText}>
                   <span className={styles.loadingSpinner}></span>
-                  <span>Memindai struktur pixel & metadata EXIF berkas...</span>
+                  <span>Menjalankan analisis Reality Defender & ekstraksi EXIF nyata...</span>
                 </div>
               </div>
             )}
@@ -799,16 +848,16 @@ Pertanyaan Pengguna: ${text}`;
                           <div className={styles.riskPercentInfo}>
                             <span className={styles.riskLabel}>Skor Risiko Manipulasi</span>
                             <span className={styles.riskValue} style={{ color: getRiskColor(activeAnalysis.riskScore) }}>
-                              {activeAnalysis.riskScore}%
+                              {activeAnalysis.riskScore != null ? `${activeAnalysis.riskScore}%` : 'N/A'}
                             </span>
                           </div>
                           <div className={styles.riskBarContainer}>
-                            <div className={styles.riskLabel}>Tingkat Keparahan: {getRiskText(activeAnalysis.riskScore)}</div>
+                            <div className={styles.riskLabel}>Tingkat Keparahan: {getRiskText(activeAnalysis.riskScore, activeAnalysis.status)}</div>
                             <div className={styles.riskBarBg}>
                               <div
                                 className={styles.riskBarFill}
                                 style={{
-                                  width: `${activeAnalysis.riskScore}%`,
+                                  width: `${activeAnalysis.riskScore ?? 0}%`,
                                   backgroundColor: getRiskColor(activeAnalysis.riskScore)
                                 }}
                               />
@@ -830,51 +879,51 @@ Pertanyaan Pengguna: ${text}`;
                               <tbody>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Pembuat Perangkat</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.make || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.make || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Model Kamera</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.camera}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.camera || activeAnalysis.exif.model || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Model Lensa</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.lens || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.lens || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Aperture</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.aperture || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.aperture || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Exposure Time</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.exposureTime || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.exposureTime || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>ISO</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.iso || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.iso || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Ruang Warna</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.colorSpace || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.colorSpace || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Lokasi GPS</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.gps || 'N/A'}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.gps || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Software</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.software}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.software || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Tanggal Asli</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.dateOriginal}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.dateOriginal || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Dimensi</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.resolution}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.resolution || '-'}</td>
                                 </tr>
                                 <tr className={styles.exifRow}>
                                   <td className={styles.exifKey}>Kompresi</td>
-                                  <td className={styles.exifValue}>{activeAnalysis.exif.compression}</td>
+                                  <td className={styles.exifValue}>{activeAnalysis.exif.compression || '-'}</td>
                                 </tr>
                               </tbody>
                             </table>
@@ -890,7 +939,7 @@ Pertanyaan Pengguna: ${text}`;
                             </div>
                             {(!activeAnalysis.anomalies || activeAnalysis.anomalies.length === 0) ? (
                               <div className={styles.noAnomaliesFallback}>
-                                <em>Tidak ada anomali terdeteksi</em>
+                                <em>Tidak ada anomali atau manipulasi yang terdeteksi oleh sistem Reality Defender.</em>
                               </div>
                             ) : (
                               <ul className={styles.anomaliesList}>

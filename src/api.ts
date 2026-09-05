@@ -9,13 +9,57 @@
  * This file defines all API paths and request wrappers.
  */
 
-import type { Message, ImageSsePayload } from './types';
+import type { Message, ImageSsePayload, AnalyzeSuccessResponse, AnalyzeErrorResponse } from './types';
 
 export const API = {
+  analyze: '/analyze',
   chat: '/chat',
   chatStop: '/chat/stop',
   history: '/history',
 } as const;
+
+/**
+ * Upload and analyze an image file via POST /analyze.
+ * Sends multipart/form-data with file payload, supports AbortSignal.
+ */
+export async function analyzeImage(file: File, signal?: AbortSignal): Promise<AnalyzeSuccessResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('fileName', file.name);
+  formData.append('mimeType', file.type);
+
+  let res: Response;
+  try {
+    res = await fetch(API.analyze, {
+      method: 'POST',
+      body: formData,
+      signal,
+    });
+  } catch (err: any) {
+    if (err.name === 'AbortError' || signal?.aborted) {
+      throw err;
+    }
+    throw new Error('Gagal menghubungi peladen analisis (/analyze). Pastikan backend EdgeOne aktif.');
+  }
+
+  let json: (AnalyzeSuccessResponse | AnalyzeErrorResponse) & { error?: { message?: string; code?: string; retryable?: boolean } };
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error(`Peladen mengembalikan respons tidak terstruktur (HTTP ${res.status}).`);
+  }
+
+  if (!res.ok || !json.success) {
+    const message = json?.error?.message || `Analisis gagal dengan kode status HTTP ${res.status}.`;
+    const err = new Error(message);
+    (err as any).code = json?.error?.code || 'analysis_failed';
+    (err as any).retryable = json?.error?.retryable ?? false;
+    (err as any).statusCode = res.status;
+    throw err;
+  }
+
+  return json as AnalyzeSuccessResponse;
+}
 
 export interface RawSseEvent {
   eventType: string;

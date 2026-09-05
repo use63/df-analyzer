@@ -152,25 +152,12 @@ export function buildTools(context: any, logger?: any): ToolRegistry {
       },
       async (args: Record<string, unknown>) => {
         const url = args.mediaUrl as string;
-        if (logger) logger.log(`[tools] Memerintahkan cloud-function untuk memindai: ${url}`);
+        if (logger) logger.log(`[tools] Permintaan pemindaian URL diterima: ${url}`);
 
-        try {
-          // 1. Impor fungsi nyata yang ada di folder cloud-functions
-          const analyzeModule = await import('../cloud-functions/analyze/index');
-          const analyzeReal = analyzeModule.default;
-          
-          // 2. Eksekusi fungsi tersebut dan kembalikan hasil aslinya ke Agen AI
-          const result = await analyzeReal({ mediaUrl: url });
-          return result;
-          
-        } catch (error) {
-          if (logger) logger.log(`[tools] Galat pemanggilan fungsi: ${error}`);
-          return {
-            status: "error",
-            message: "Gagal mengeksekusi pemindaian sistem.",
-            details: String(error)
-          };
-        }
+        return {
+          status: "notice",
+          message: "Pemindaian URL langsung melalui asisten AI saat ini dinonaktifkan demi alasan keamanan (pencegahan SSRF). Silakan unggah berkas gambar secara langsung melalui panel dasbor DF-Analyzer untuk analisis Reality Defender dan ekstraksi EXIF lengkap."
+        };
       }
     );
 
