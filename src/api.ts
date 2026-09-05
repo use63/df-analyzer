@@ -77,8 +77,8 @@ export interface StreamCallbacks {
   onRawEvent?: (event: RawSseEvent) => void;
 }
 
-/** Get conversation history for restoring the chat window after page refresh. */
-export async function fetchConversationHistory(conversationId: string): Promise<Message[]> {
+/** Get conversation history for restoring the chat window after page refresh. Supports AbortSignal. */
+export async function fetchConversationHistory(conversationId: string, signal?: AbortSignal): Promise<Message[]> {
   try {
     const res = await fetch(API.history, {
       method: 'POST',
@@ -86,14 +86,18 @@ export async function fetchConversationHistory(conversationId: string): Promise<
         'Content-Type': 'application/json',
         'makers-conversation-id': conversationId,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ conversation_id: conversationId }),
+      signal,
     });
 
     if (!res.ok) return [];
 
     const data = await res.json().catch(() => null) as { messages?: Message[] } | null;
     return Array.isArray(data?.messages) ? data.messages : [];
-  } catch {
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || signal?.aborted) {
+      throw err;
+    }
     return [];
   }
 }

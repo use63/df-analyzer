@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Message, ReplLine } from './types';
-import { fetchConversationHistory, sendMessageStream, analyzeImage } from './api';
+import type { Message, ReplLine, StreamRuntime } from './types';
+import { fetchConversationHistory, sendMessageStream, analyzeImage, stopAgent } from './api';
 import { I18nProvider } from './i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -133,10 +133,10 @@ function AppInner() {
   // Chatbot states
   const [lines, setLines] = useState<ReplLine[]>([]);
   const [inputText, setInputText] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [generatingCids, setGeneratingCids] = useState<Record<string, boolean>>({});
   const [historyLoading, setHistoryLoading] = useState(true);
 
-  const abortCtrlRef = useRef<AbortController | null>(null);
+  const streamRegistryRef = useRef<Map<string, StreamRuntime>>(new Map());
   const analyzeAbortCtrlRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const triggeredGreetingsRef = useRef<Set<string>>(new Set());
@@ -153,10 +153,66 @@ function AppInner() {
     })(),
   );
 
+  const activeConversationIdRef = useRef<string>(conversationIdRef.current);
+  const historyAbortCtrlRef = useRef<AbortController | null>(null);
+  const historyOperationIdRef = useRef<number>(0);
+
+  // Active conversation's generating status
+  const activeTargetCid = activeAnalysis?.conversationId || conversationIdRef.current;
+  const loading = Boolean(generatingCids[activeTargetCid]);
+
+  const setConversationGenerating = useCallback((cid: string, isGenerating: boolean) => {
+    setGeneratingCids(prev => {
+      if (Boolean(prev[cid]) === isGenerating) return prev;
+      const next = { ...prev };
+      if (isGenerating) {
+        next[cid] = true;
+      } else {
+        delete next[cid];
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * Updates conversation lines directly in the cache bucket of targetCid,
+   * and synchronizes the active screen state ONLY if the target conversation is currently displayed.
+   */
+  const updateConversationLines = useCallback((
+    targetCid: string,
+    updater: (prev: ReplLine[]) => ReplLine[]
+  ) => {
+    const prev = chatCacheRef.current[targetCid] || [];
+    const next = updater(prev);
+    chatCacheRef.current[targetCid] = next;
+
+    if (activeConversationIdRef.current === targetCid) {
+      setLines(next);
+    }
+  }, []);
+
   // Scroll to bottom of chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [lines]);
+
+  // Clean up ongoing requests on unmount
+  useEffect(() => {
+    return () => {
+      if (historyAbortCtrlRef.current) {
+        historyAbortCtrlRef.current.abort();
+      }
+      if (analyzeAbortCtrlRef.current) {
+        analyzeAbortCtrlRef.current.abort();
+      }
+      // Abort and stop all ongoing conversation streams
+      streamRegistryRef.current.forEach((runtime, cid) => {
+        runtime.controller.abort();
+        stopAgent(cid).catch(() => {});
+      });
+      streamRegistryRef.current.clear();
+    };
+  }, []);
 
   // Load analysis history from IndexedDB on mount and migrate legacy items
   useEffect(() => {
@@ -185,14 +241,15 @@ function AppInner() {
       });
   }, []);
 
-  // Trigger proactive greeting when opening Chat/AI Assistant tab
+  // Trigger proactive greeting when opening Chat/AI Assistant tab (guarded against in-flight history loading)
   useEffect(() => {
-    if (activeTab === 'ai' && activeAnalysis) {
-      const fileId = activeAnalysis.id;
-      if (!triggeredGreetingsRef.current.has(fileId)) {
-        const isHistoryEmpty = lines.length === 0 || (lines.length === 1 && lines[0].kind === 'sysHint');
+    if (activeTab === 'ai' && activeAnalysis && !historyLoading) {
+      const cid = activeAnalysis.conversationId;
+      if (!triggeredGreetingsRef.current.has(cid)) {
+        const currentCached = chatCacheRef.current[cid];
+        const isHistoryEmpty = !currentCached || currentCached.length === 0 || (currentCached.length === 1 && currentCached[0].kind === 'sysHint');
         if (isHistoryEmpty) {
-          triggeredGreetingsRef.current.add(fileId);
+          triggeredGreetingsRef.current.add(cid);
           handleSendMessage(
             undefined,
             'Tolong berikan 1-2 paragraf kesimpulan analitis mengenai hasil analisis gambar ini.'
@@ -200,87 +257,113 @@ function AppInner() {
         }
       }
     }
-  }, [activeTab, activeAnalysis, lines]);
+  }, [activeTab, activeAnalysis, historyLoading]);
 
-  // Sync activeAnalysisIdRef when activeAnalysis changes
+  // Handle activeAnalysis change: load from cache or fetch from backend /history with ownership guard
   useEffect(() => {
+    const targetCid = activeAnalysis?.conversationId || conversationIdRef.current;
+    activeConversationIdRef.current = targetCid;
     activeAnalysisIdRef.current = activeAnalysis?.id || 'new';
-  }, [activeAnalysis]);
 
-  // Save lines to cache whenever they change
-  useEffect(() => {
-    const currentId = activeAnalysisIdRef.current;
-    chatCacheRef.current[currentId] = lines;
-  }, [lines]);
-
-  // Handle activeAnalysis change: load from cache or fetch from backend /history
-  useEffect(() => {
-    const currentId = activeAnalysis?.id || 'new';
-
-    // Abort active streaming
-    if (abortCtrlRef.current) {
-      abortCtrlRef.current.abort();
-      abortCtrlRef.current = null;
+    // 1. Abort previous history request (stale history requests can be re-fetched)
+    if (historyAbortCtrlRef.current) {
+      historyAbortCtrlRef.current.abort();
+      historyAbortCtrlRef.current = null;
     }
-    setLoading(false);
 
-    // Retrieve from cache
-    const cachedLines = chatCacheRef.current[currentId];
+    // 2. Increment operation ID to invalidate in-flight history callbacks
+    const currentOpId = ++historyOperationIdRef.current;
+
+    // 3. Retrieve from cache if available (including active or background stream output)
+    const cachedLines = chatCacheRef.current[targetCid];
     if (cachedLines && cachedLines.length > 0) {
       setLines(cachedLines);
-    } else if (activeAnalysis) {
-      // If not cached in memory, fetch history from backend using the file's conversationId
-      const cid = activeAnalysis.conversationId;
+      setHistoryLoading(false);
+      return;
+    }
+
+    // 4. If not cached and activeAnalysis exists, fetch history from backend using conversationId
+    if (activeAnalysis) {
+      const initialHint: ReplLine = {
+        kind: 'sysHint',
+        id: 'init-hint-' + targetCid,
+        text: 'Memuat riwayat obrolan...',
+        ts: Date.now(),
+        tone: 'dim'
+      };
+      setLines([initialHint]);
       setHistoryLoading(true);
-      fetchConversationHistory(cid)
+
+      const abortCtrl = new AbortController();
+      historyAbortCtrlRef.current = abortCtrl;
+
+      fetchConversationHistory(targetCid, abortCtrl.signal)
         .then((history) => {
+          // Ownership & Stale-Response Guard: Ignore if operation is stale or active conversation changed
+          if (historyOperationIdRef.current !== currentOpId || activeConversationIdRef.current !== targetCid) {
+            if (history.length > 0) {
+              const existing = chatCacheRef.current[targetCid];
+              if (!existing || existing.length === 0 || (existing.length === 1 && existing[0].id === 'init-hint-' + targetCid)) {
+                chatCacheRef.current[targetCid] = historyToLines(history);
+                triggeredGreetingsRef.current.add(targetCid);
+              }
+            }
+            return;
+          }
+
           if (history.length > 0) {
             const restoredLines = historyToLines(history);
+            chatCacheRef.current[targetCid] = restoredLines;
             setLines(restoredLines);
-            chatCacheRef.current[currentId] = restoredLines;
-            // Mark as already greeted since history exists
-            triggeredGreetingsRef.current.add(activeAnalysis.id);
+            triggeredGreetingsRef.current.add(targetCid);
           } else {
-            // No history on backend, initialize fresh
-            setLines([
-              {
-                kind: 'sysHint',
-                id: 'init-hint-' + currentId,
-                text: 'Sistem analisis aktif. Pilih riwayat analisis di sebelah kiri atau unggah foto baru untuk dianalisis, lalu Anda dapat bertanya kepada AI seputar hasil analisis tersebut di sini.',
-                ts: Date.now(),
-                tone: 'dim'
-              }
-            ]);
-            triggeredGreetingsRef.current.delete(activeAnalysis.id);
+            // Guard: If chatCacheRef already has content (e.g. proactive greeting or active stream), do NOT overwrite!
+            const existingCache = chatCacheRef.current[targetCid];
+            if (existingCache && existingCache.length > 0 && !(existingCache.length === 1 && existingCache[0].id === 'init-hint-' + targetCid)) {
+              setLines(existingCache);
+              return;
+            }
+            const emptyHint: ReplLine = {
+              kind: 'sysHint',
+              id: 'init-hint-' + targetCid,
+              text: 'Sistem analisis aktif. Pilih riwayat analisis di sebelah kiri atau unggah foto baru untuk dianalisis, lalu Anda dapat bertanya kepada AI seputar hasil analisis tersebut di sini.',
+              ts: Date.now(),
+              tone: 'dim'
+            };
+            chatCacheRef.current[targetCid] = [emptyHint];
+            setLines([emptyHint]);
           }
         })
-        .catch((err) => {
+        .catch((err: any) => {
+          if (err?.name === 'AbortError' || abortCtrl.signal.aborted) return;
+          if (historyOperationIdRef.current !== currentOpId || activeConversationIdRef.current !== targetCid) return;
           console.error('Failed to load conversation history from backend:', err);
-          // Fallback to empty state
-          setLines([
-            {
-              kind: 'sysHint',
-              id: 'init-hint-err-' + currentId,
-              text: 'Gagal memuat riwayat obrolan dari server. Anda tetap dapat memulai obrolan baru.',
-              ts: Date.now(),
-              tone: 'warn'
-            }
-          ]);
+          const errHint: ReplLine = {
+            kind: 'sysHint',
+            id: 'init-hint-err-' + targetCid,
+            text: 'Gagal memuat riwayat obrolan dari server. Anda tetap dapat memulai obrolan baru.',
+            ts: Date.now(),
+            tone: 'warn'
+          };
+          chatCacheRef.current[targetCid] = [errHint];
+          setLines([errHint]);
         })
         .finally(() => {
-          setHistoryLoading(false);
+          if (historyOperationIdRef.current === currentOpId && activeConversationIdRef.current === targetCid) {
+            setHistoryLoading(false);
+          }
         });
     } else {
-      // No active file, clear to initial hint
-      setLines([
-        {
-          kind: 'sysHint',
-          id: 'init-hint-' + currentId,
-          text: 'Sistem analisis aktif. Pilih riwayat analisis di sebelah kiri atau unggah foto baru untuk dianalisis, lalu Anda dapat bertanya kepada AI seputar hasil analisis tersebut di sini.',
-          ts: Date.now(),
-          tone: 'dim'
-        }
-      ]);
+      const freshHint: ReplLine = {
+        kind: 'sysHint',
+        id: 'init-hint-' + targetCid,
+        text: 'Sistem analisis aktif. Pilih riwayat analisis di sebelah kiri atau unggah foto baru untuk dianalisis, lalu Anda dapat bertanya kepada AI seputar hasil analisis tersebut di sini.',
+        ts: Date.now(),
+        tone: 'dim'
+      };
+      chatCacheRef.current[targetCid] = [freshHint];
+      setLines([freshHint]);
+      setHistoryLoading(false);
     }
   }, [activeAnalysis]);
 
@@ -376,18 +459,16 @@ function AppInner() {
       setNavigationMode('history');
       setActiveTab('analysis');
 
-      // Add system notification in the chat
+      // Add system notification in the chat cache of new conversation
       const riskDisplay = data.riskScore != null ? `${data.riskScore}%` : (data.status || 'N/A');
-      setLines(prev => [
-        ...prev,
-        {
-          kind: 'sysHint',
-          id: crypto.randomUUID(),
-          text: `[Analisis Forensik Selesai]: Berhasil memindai "${file.name}". Status: ${data.status} | Skor Risiko: ${riskDisplay}. Anda sekarang dapat menanyakan kesimpulan forensik kepada AI.`,
-          ts: Date.now(),
-          tone: (data.riskScore ?? 0) > 60 ? 'warn' : 'dim'
-        }
-      ]);
+      const welcomeLine: ReplLine = {
+        kind: 'sysHint',
+        id: crypto.randomUUID(),
+        text: `[Analisis Forensik Selesai]: Berhasil memindai "${file.name}". Status: ${data.status} | Skor Risiko: ${riskDisplay}. Anda sekarang dapat menanyakan kesimpulan forensik kepada AI.`,
+        ts: Date.now(),
+        tone: (data.riskScore ?? 0) > 60 ? 'warn' : 'dim'
+      };
+      chatCacheRef.current[newConversationId] = [welcomeLine];
     } catch (err: any) {
       if (err.name === 'AbortError' || abortCtrl.signal.aborted) {
         return;
@@ -402,10 +483,26 @@ function AppInner() {
     }
   };
 
+  const handleStopStream = useCallback((cidToStop?: string) => {
+    const targetCid = cidToStop || activeAnalysis?.conversationId || conversationIdRef.current;
+    const runtime = streamRegistryRef.current.get(targetCid);
+    if (runtime) {
+      runtime.controller.abort();
+      streamRegistryRef.current.delete(targetCid);
+    }
+    stopAgent(targetCid).catch(() => {});
+    setConversationGenerating(targetCid, false);
+  }, [activeAnalysis, setConversationGenerating]);
+
   const handleSendMessage = (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
     const textToSend = customText !== undefined ? customText : inputText;
-    if (!textToSend.trim() || loading) return;
+    if (!textToSend.trim()) return;
+
+    const targetCid = activeAnalysis?.conversationId || conversationIdRef.current;
+
+    // Reject starting a second concurrent stream for the same conversation
+    if (generatingCids[targetCid]) return;
 
     const text = textToSend.trim();
     if (customText === undefined) {
@@ -415,32 +512,33 @@ function AppInner() {
     // Append user message ONLY IF it is not a custom (hidden) prompt
     if (customText === undefined) {
       const userMsgId = crypto.randomUUID();
-      setLines(prev => [...prev, { kind: 'user', id: userMsgId, text, ts: Date.now() }]);
+      updateConversationLines(targetCid, prev => [...prev, { kind: 'user', id: userMsgId, text, ts: Date.now() }]);
     }
 
-    setLoading(true);
+    setConversationGenerating(targetCid, true);
     const turnId = crypto.randomUUID();
-    const cid = activeAnalysis?.conversationId || conversationIdRef.current;
+    const streamOperationId = crypto.randomUUID();
 
-    // Contextually enrich AI request with the current analysis data
+    // Snapshot target analysis context at submission time so closures do not drift
+    const targetAnalysis = activeAnalysis?.conversationId === targetCid ? activeAnalysis : null;
     let messageWithContext = text;
     let analysisContext: any = null;
-    if (activeAnalysis) {
-      const scoreDisplay = activeAnalysis.riskScore != null ? `${activeAnalysis.riskScore}%` : (activeAnalysis.status || 'Tidak tersedia');
+    if (targetAnalysis) {
+      const scoreDisplay = targetAnalysis.riskScore != null ? `${targetAnalysis.riskScore}%` : (targetAnalysis.status || 'Tidak tersedia');
       const exifItems = [
-        activeAnalysis.exif.camera ? `Kamera=${activeAnalysis.exif.camera}` : null,
-        activeAnalysis.exif.software ? `Software=${activeAnalysis.exif.software}` : null,
-        activeAnalysis.exif.resolution ? `Resolusi/Dimensi=${activeAnalysis.exif.resolution}` : null,
-        activeAnalysis.exif.compression ? `Kompresi=${activeAnalysis.exif.compression}` : null,
+        targetAnalysis.exif.camera ? `Kamera=${targetAnalysis.exif.camera}` : null,
+        targetAnalysis.exif.software ? `Software=${targetAnalysis.exif.software}` : null,
+        targetAnalysis.exif.resolution ? `Resolusi/Dimensi=${targetAnalysis.exif.resolution}` : null,
+        targetAnalysis.exif.compression ? `Kompresi=${targetAnalysis.exif.compression}` : null,
       ].filter(Boolean).join(', ') || 'Metadata EXIF tidak tersedia';
 
-      const anomaliesText = activeAnalysis.anomalies.length > 0
-        ? activeAnalysis.anomalies.join(' | ')
+      const anomaliesText = targetAnalysis.anomalies.length > 0
+        ? targetAnalysis.anomalies.join(' | ')
         : 'Tidak ada indikasi anomali terdeteksi';
 
       messageWithContext = `[Konteks Hasil Analisis Media Aktif:
-Nama File: ${activeAnalysis.fileName}
-Status Deteksi: ${activeAnalysis.status || 'ANALYZED'}
+Nama File: ${targetAnalysis.fileName}
+Status Deteksi: ${targetAnalysis.status || 'ANALYZED'}
 Skor Risiko Manipulasi: ${scoreDisplay}
 Metadata EXIF: ${exifItems}
 Daftar Anomali: ${anomaliesText}
@@ -449,19 +547,19 @@ Pertanyaan Pengguna: ${text}`;
 
       // Filter analysis context to exclude Base64/URL image data
       analysisContext = {
-        fileName: activeAnalysis.fileName,
-        riskScore: activeAnalysis.riskScore,
-        status: activeAnalysis.status,
-        exif: activeAnalysis.exif,
-        anomalies: activeAnalysis.anomalies,
+        fileName: targetAnalysis.fileName,
+        riskScore: targetAnalysis.riskScore,
+        status: targetAnalysis.status,
+        exif: targetAnalysis.exif,
+        anomalies: targetAnalysis.anomalies,
       };
     }
 
     let currentAssistantText = '';
     const assistantMsgId = crypto.randomUUID();
 
-    // Set temporary text line for streaming output
-    setLines(prev => [
+    // Set temporary text line for streaming output in target bucket
+    updateConversationLines(targetCid, prev => [
       ...prev,
       {
         kind: 'text',
@@ -478,7 +576,7 @@ Pertanyaan Pengguna: ${text}`;
       {
         onTextDelta: (delta) => {
           currentAssistantText += delta;
-          setLines(prev => prev.map(line => {
+          updateConversationLines(targetCid, prev => prev.map(line => {
             if (line.kind === 'text' && line.id === assistantMsgId) {
               return { ...line, text: currentAssistantText };
             }
@@ -486,7 +584,7 @@ Pertanyaan Pengguna: ${text}`;
           }));
         },
         onToolCalled: (toolName) => {
-          setLines(prev => [
+          updateConversationLines(targetCid, prev => [
             ...prev,
             {
               kind: 'tool',
@@ -498,9 +596,9 @@ Pertanyaan Pengguna: ${text}`;
           ]);
         },
         onImage: (payload) => {
-          const storageKey = `${cid}/${payload.imageId}`;
+          const storageKey = `${targetCid}/${payload.imageId}`;
           const url = `data:${payload.mimeType};base64,${payload.base64}`;
-          setLines(prev => [
+          updateConversationLines(targetCid, prev => [
             ...prev,
             {
               kind: 'image',
@@ -520,7 +618,7 @@ Pertanyaan Pengguna: ${text}`;
         },
         onDone: () => {
           // Collapse turn text to markdown
-          setLines(prev => prev.map(line => {
+          updateConversationLines(targetCid, prev => prev.map(line => {
             if (line.kind === 'text' && line.id === assistantMsgId) {
               return {
                 kind: 'markdown',
@@ -533,47 +631,72 @@ Pertanyaan Pengguna: ${text}`;
             }
             return line;
           }));
-          setLoading(false);
+
+          // Ownership cleanup: unregister only if operationId matches
+          if (streamRegistryRef.current.get(targetCid)?.operationId === streamOperationId) {
+            streamRegistryRef.current.delete(targetCid);
+            setConversationGenerating(targetCid, false);
+          }
         },
         onError: (err) => {
-          setLines(prev => [
-            ...prev,
-            {
-              kind: 'error',
-              id: crypto.randomUUID(),
-              ts: Date.now(),
-              message: err.message || 'Gagal memproses jawaban dari AI'
-            }
-          ]);
-          setLoading(false);
+          const isAborted = ctrl.signal.aborted || (err as any)?.name === 'AbortError';
+          if (!isAborted) {
+            updateConversationLines(targetCid, prev => [
+              ...prev,
+              {
+                kind: 'error',
+                id: crypto.randomUUID(),
+                ts: Date.now(),
+                message: err.message || 'Gagal memproses jawaban dari AI'
+              }
+            ]);
+          }
+
+          // Ownership cleanup: unregister only if operationId matches
+          if (streamRegistryRef.current.get(targetCid)?.operationId === streamOperationId) {
+            streamRegistryRef.current.delete(targetCid);
+            setConversationGenerating(targetCid, false);
+          }
         }
       },
-      cid,
+      targetCid,
       analysisContext
     );
 
-    abortCtrlRef.current = ctrl;
+    // Register active stream in registry
+    streamRegistryRef.current.set(targetCid, {
+      controller: ctrl,
+      operationId: streamOperationId
+    });
   };
 
   const handleResetSession = useCallback(() => {
-    if (abortCtrlRef.current) {
-      abortCtrlRef.current.abort();
-      abortCtrlRef.current = null;
+    const targetCid = activeAnalysis?.conversationId || conversationIdRef.current;
+    const runtime = streamRegistryRef.current.get(targetCid);
+    if (runtime) {
+      runtime.controller.abort();
+      streamRegistryRef.current.delete(targetCid);
     }
+    stopAgent(targetCid).catch(() => {});
+    setConversationGenerating(targetCid, false);
+
+    if (historyAbortCtrlRef.current) {
+      historyAbortCtrlRef.current.abort();
+      historyAbortCtrlRef.current = null;
+    }
+    historyOperationIdRef.current += 1;
+
     if (analyzeAbortCtrlRef.current) {
       analyzeAbortCtrlRef.current.abort();
       analyzeAbortCtrlRef.current = null;
     }
-    setLoading(false);
+    setHistoryLoading(false);
     setScanning(false);
     setScanError(null);
 
-    // Clear triggered greetings and chat cache memory
-    triggeredGreetingsRef.current.clear();
-    chatCacheRef.current = {};
-    
     // Create a new conversation ID
     const newId = crypto.randomUUID();
+    activeConversationIdRef.current = newId;
 
     if (activeAnalysis) {
       const updated = { ...activeAnalysis, conversationId: newId };
@@ -585,17 +708,16 @@ Pertanyaan Pengguna: ${text}`;
       conversationIdRef.current = newId;
     }
 
-    // Reset lines
-    setLines([
-      {
-        kind: 'sysHint',
-        id: 'reset-hint',
-        text: 'Sesi analisis direset. Id percakapan baru dibuat.',
-        ts: Date.now(),
-        tone: 'warn'
-      }
-    ]);
-  }, [activeAnalysis]);
+    const resetHint: ReplLine = {
+      kind: 'sysHint',
+      id: 'reset-hint-' + newId,
+      text: 'Sesi analisis direset. Id percakapan baru dibuat.',
+      ts: Date.now(),
+      tone: 'warn'
+    };
+    chatCacheRef.current[newId] = [resetHint];
+    setLines([resetHint]);
+  }, [activeAnalysis, setConversationGenerating]);
 
   const handleClearAllHistory = () => {
     if (window.confirm('Apakah Anda yakin ingin menghapus seluruh riwayat analisis? Tindakan ini tidak dapat dibatalkan.')) {
@@ -603,6 +725,21 @@ Pertanyaan Pengguna: ${text}`;
         analyzeAbortCtrlRef.current.abort();
         analyzeAbortCtrlRef.current = null;
       }
+      if (historyAbortCtrlRef.current) {
+        historyAbortCtrlRef.current.abort();
+        historyAbortCtrlRef.current = null;
+      }
+      historyOperationIdRef.current += 1;
+
+      // Abort all in-flight streams across all conversations
+      streamRegistryRef.current.forEach((runtime, cid) => {
+        runtime.controller.abort();
+        stopAgent(cid).catch(() => {});
+      });
+      streamRegistryRef.current.clear();
+      setGeneratingCids({});
+      setHistoryLoading(false);
+
       clearAllAnalysisFromDB()
         .then(() => {
           setHistoryList([]);
@@ -611,15 +748,17 @@ Pertanyaan Pengguna: ${text}`;
           setScanError(null);
           triggeredGreetingsRef.current.clear();
           chatCacheRef.current = {};
-          setLines([
-            {
-              kind: 'sysHint',
-              id: 'clear-hint',
-              text: 'Semua riwayat analisis telah dibersihkan.',
-              ts: Date.now(),
-              tone: 'warn'
-            }
-          ]);
+          const clearId = crypto.randomUUID();
+          activeConversationIdRef.current = clearId;
+          const clearHint: ReplLine = {
+            kind: 'sysHint',
+            id: 'clear-hint',
+            text: 'Semua riwayat analisis telah dibersihkan.',
+            ts: Date.now(),
+            tone: 'warn'
+          };
+          chatCacheRef.current[clearId] = [clearHint];
+          setLines([clearHint]);
         })
         .catch(err => {
           console.error('Failed to clear history from IndexedDB:', err);
@@ -697,7 +836,11 @@ Pertanyaan Pengguna: ${text}`;
                 </div>
                 <div className={styles.cardMeta}>
                   <span>Tipe: Gambar</span>
-                  <span>{item.exif?.dateOriginal ? item.exif.dateOriginal.slice(0, 10) : 'Lokal'}</span>
+                  {generatingCids[item.conversationId] ? (
+                    <span style={{ color: '#ffb000', fontWeight: 600 }}>● Menjawab...</span>
+                  ) : (
+                    <span>{item.exif?.dateOriginal ? item.exif.dateOriginal.slice(0, 10) : 'Lokal'}</span>
+                  )}
                 </div>
               </button>
             ))}
@@ -1073,16 +1216,31 @@ Pertanyaan Pengguna: ${text}`;
                           className={styles.chatInput}
                           disabled={loading}
                         />
-                        <button
-                          type="submit"
-                          disabled={loading || !inputText.trim()}
-                          className={styles.btnSend}
-                        >
-                          <span>Kirim</span>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                          </svg>
-                        </button>
+                        {loading ? (
+                          <button
+                            type="button"
+                            onClick={() => handleStopStream()}
+                            className={styles.btnSend}
+                            style={{ backgroundColor: '#ff6e6e', color: '#ffffff' }}
+                            title="Hentikan pembuatan jawaban"
+                          >
+                            <span>Stop</span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                              <rect x="6" y="6" width="12" height="12" rx="2" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <button
+                            type="submit"
+                            disabled={!inputText.trim()}
+                            className={styles.btnSend}
+                          >
+                            <span>Kirim</span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                          </button>
+                        )}
                       </form>
                     </div>
                   </div>

@@ -179,3 +179,8 @@ export interface AnalyzeErrorResponse {
 }
 
 export type AnalyzeResponse = AnalyzeSuccessResponse | AnalyzeErrorResponse;
+
+export interface StreamRuntime {
+  controller: AbortController;
+  operationId: string;
+}
