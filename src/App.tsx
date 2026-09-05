@@ -5,6 +5,7 @@ import { I18nProvider } from './i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import styles from './App.module.css';
+import { InformationPage } from './components/InformationPage';
 
 const CONVERSATION_ID_STORAGE_KEY = 'eo_conversation_id';
 
@@ -129,6 +130,7 @@ function AppInner() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [navigationMode, setNavigationMode] = useState<'new' | 'history'>('new');
   const [activeTab, setActiveTab] = useState<'analysis' | 'ai'>('analysis');
+  const [informationOpen, setInformationOpen] = useState(false);
 
   // Chatbot states
   const [lines, setLines] = useState<ReplLine[]>([]);
@@ -805,10 +807,11 @@ Pertanyaan Pengguna: ${text}`;
         <div className={styles.sidebarNav}>
           <button
             onClick={() => {
+              setInformationOpen(false);
               setNavigationMode('new');
               setActiveAnalysis(null);
             }}
-            className={`${styles.btnNewAnalysis} ${navigationMode === 'new' ? styles.btnNewAnalysisActive : ''}`}
+            className={`${styles.btnNewAnalysis} ${navigationMode === 'new' && !informationOpen ? styles.btnNewAnalysisActive : ''}`}
           >
             <span>➕ Analisis Baru</span>
           </button>
@@ -821,10 +824,11 @@ Pertanyaan Pengguna: ${text}`;
               <button
                 key={item.id}
                 onClick={() => {
+                  setInformationOpen(false);
                   setActiveAnalysis(item);
                   setNavigationMode('history');
                 }}
-                className={`${styles.historyCard} ${navigationMode === 'history' && activeAnalysis?.id === item.id ? styles.historyCardActive : ''}`}
+                className={`${styles.historyCard} ${navigationMode === 'history' && activeAnalysis?.id === item.id && !informationOpen ? styles.historyCardActive : ''}`}
               >
                 <div className={styles.historyCardHeader}>
                   <span className={styles.fileName} title={item.fileName}>
@@ -855,11 +859,27 @@ Pertanyaan Pengguna: ${text}`;
             </button>
           )}
         </div>
+
+        <div className={styles.sidebarBottom}>
+          <button
+            type="button"
+            onClick={() => setInformationOpen(true)}
+            className={`${styles.btnInfo} ${informationOpen ? styles.btnInfoActive : ''}`}
+            aria-current={informationOpen ? 'page' : undefined}
+          >
+            <span>ⓘ Informasi Aplikasi</span>
+          </button>
+        </div>
       </div>
 
       {/* ── COLUMN 2: MAIN CONTENT ── */}
       <div className={styles.mainContent}>
-        {navigationMode === 'new' ? (
+        <div
+          className={styles.workspaceWrapper}
+          inert={informationOpen ? true : undefined}
+          aria-hidden={informationOpen ? 'true' : undefined}
+        >
+          {navigationMode === 'new' ? (
           /* UPPER ROW: FILE UPLOADER ONLY */
           <div className={styles.topSection}>
             <div className={styles.panelTitle}>
@@ -906,7 +926,7 @@ Pertanyaan Pengguna: ${text}`;
               <div style={{ display: 'flex', justifyContent: 'center', margin: '20px 0' }}>
                 <div className={styles.scanningText}>
                   <span className={styles.loadingSpinner}></span>
-                  <span>Menjalankan analisis Reality Defender & ekstraksi EXIF nyata...</span>
+                  <span>Memeriksa indikasi manipulasi dan metadata gambar…</span>
                 </div>
               </div>
             )}
@@ -1248,6 +1268,11 @@ Pertanyaan Pengguna: ${text}`;
               </div>
             </div>
           </>
+        )}
+        </div>
+
+        {informationOpen && (
+          <InformationPage onBack={() => setInformationOpen(false)} />
         )}
       </div>
     </div>

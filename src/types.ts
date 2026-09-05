@@ -1,3 +1,11 @@
+import type {} from 'react';
+
+declare module 'react' {
+  interface HTMLAttributes<T> {
+    inert?: boolean;
+  }
+}
+
 // ─── Legacy chat types (still used by /history adapter & SSE callback bridge) ──
 export interface Message {
   id: string;
@@ -184,3 +192,5 @@ export interface StreamRuntime {
   controller: AbortController;
   operationId: string;
 }
+
+export const APP_VERSION = __APP_VERSION__;
